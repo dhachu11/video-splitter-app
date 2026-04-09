@@ -3,23 +3,17 @@ import os
 import subprocess
 import whisper
 import zipfile
+import time
 
 # ===== PAGE CONFIG =====
 st.set_page_config(page_title="AI Video Splitter", page_icon="🎬", layout="centered")
 
-# ===== CUSTOM CSS =====
+# ===== UI STYLE =====
 st.markdown("""
 <style>
-body {
-    background-color: #0f172a;
-}
-.main {
-    background-color: #0f172a;
-}
-h1 {
-    text-align: center;
-    color: #ffffff;
-}
+body { background-color: #0f172a; }
+.main { background-color: #0f172a; }
+h1 { text-align: center; color: #ffffff; }
 .stButton>button {
     background-color: #6366f1;
     color: white;
@@ -27,10 +21,6 @@ h1 {
     height: 3em;
     width: 100%;
     font-size: 16px;
-}
-.stSelectbox label, .stFileUploader label {
-    color: #e5e7eb;
-    font-weight: bold;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -41,7 +31,7 @@ st.caption("Split videos + generate captions automatically")
 
 st.divider()
 
-# ===== UPLOAD =====
+# ===== FILE UPLOAD =====
 uploaded_file = st.file_uploader("📤 Upload your video", type=["mp4", "mov", "avi"])
 
 # ===== SETTINGS =====
@@ -49,6 +39,8 @@ interval = st.selectbox("⏱ Select clip duration", [15, 30, 45, 60])
 
 # ===== PROCESS =====
 if uploaded_file is not None:
+
+    # Save uploaded file
     with open("input.mp4", "wb") as f:
         f.write(uploaded_file.read())
 
@@ -58,14 +50,14 @@ if uploaded_file is not None:
 
         output_folder = "clips"
 
-        # Clear old clips (important)
+        # Clear old clips
         if os.path.exists(output_folder):
             for file in os.listdir(output_folder):
                 os.remove(os.path.join(output_folder, file))
         else:
             os.makedirs(output_folder)
 
-        # ===== GET VIDEO DURATION =====
+        # ===== GET DURATION =====
         def get_duration(video):
             result = subprocess.run(
                 ["ffprobe", "-v", "error", "-show_entries",
@@ -79,9 +71,9 @@ if uploaded_file is not None:
         duration = get_duration("input.mp4")
         st.info(f"🎬 Total Duration: {duration:.2f} sec")
 
-        # ===== LOAD AI MODEL =====
+        # ===== LOAD WHISPER =====
         with st.spinner("🤖 Loading AI model..."):
-            model = whisper.load_model("tiny")  # use "base" if powerful PC
+            model = whisper.load_model("tiny")
 
         start = 0
         clip_num = 1
@@ -89,31 +81,40 @@ if uploaded_file is not None:
         progress = st.progress(0)
         status = st.empty()
 
-        # ===== PROCESS VIDEO =====
+        # ===== PROCESS LOOP =====
         while start < duration:
             output_clip = f"{output_folder}/clip_{clip_num}.mp4"
 
             status.write(f"✂️ Processing clip {clip_num}...")
 
+            # Stable FFmpeg command (IMPORTANT FIX)
             subprocess.run([
                 "ffmpeg",
                 "-i", "input.mp4",
                 "-ss", str(start),
                 "-t", str(interval),
-                "-c", "copy",
+                "-c:v", "libx264",
+                "-c:a", "aac",
                 output_clip
             ])
 
-            # Generate captions
-            result = model.transcribe(output_clip)
+            # Wait for file to be ready
+            time.sleep(1)
 
-            with open(f"{output_folder}/clip_{clip_num}.txt", "w", encoding="utf-8") as f:
-                f.write(result["text"])
+            # ===== TRANSCRIBE (SAFE) =====
+            try:
+                result = model.transcribe(output_clip)
+
+                with open(f"{output_folder}/clip_{clip_num}.txt", "w", encoding="utf-8") as f:
+                    f.write(result["text"])
+
+            except Exception as e:
+                st.warning(f"⚠️ Skipping clip {clip_num} (audio issue)")
 
             start += interval
             clip_num += 1
 
-            progress.progress(min(start/duration, 1.0))
+            progress.progress(min(start / duration, 1.0))
 
         # ===== DONE =====
         st.success("🎉 Done! All clips created successfully")
